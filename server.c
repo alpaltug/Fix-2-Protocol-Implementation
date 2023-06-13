@@ -101,7 +101,7 @@ void formatNewOrderSingle(const NewOrderSingle* order, char* message) {
     sprintf(message + strlen(message), "SendingTime=YYYYMMDD-HH:MM:SS|CheckSum=%d|", checksum);
 }
 
-void handleNewOrderSingle(ClientInfo* client, NewOrderSingle* order, FILE* logFile, NewOrderSingle** buyOrders, NewOrderSingle** sellOrders, int* serverSeqNum, MarketData* marketDataList, int* marketDataCount) {
+void handleNewOrderSingle(ClientInfo* client, NewOrderSingle* order, FILE* logFile, NewOrderSingle** buyOrders, NewOrderSingle** sellOrders, int* serverSeqNum) {
     char orderDetails[BUFFER_SIZE];
     sprintf(orderDetails, "ClientID: %d, ClOrdID: %s, Instrument: %s, Side: %s, Quantity: %d, Price: %.2f",
             client->clientId, order->clOrdId, order->instrument, order->side, order->quantity, order->price);
@@ -127,6 +127,7 @@ void handleNewOrderSingle(ClientInfo* client, NewOrderSingle* order, FILE* logFi
         if (strcmp(currentOrder->instrument, order->instrument) == 0 && currentOrder->quantity == order->quantity) {
             if ((isBuyOrder && currentOrder->price <= order->price) ||
                 (!isBuyOrder && currentOrder->price >= order->price)) {
+                printf("%d%d", (int)order->price, (int)currentOrder->price);
                 printf("Match found: %s\n", orderDetails);
 
                 client->lastSeqNum++;
@@ -166,9 +167,9 @@ void handleNewOrderSingle(ClientInfo* client, NewOrderSingle* order, FILE* logFi
 
     // Only add sell orders to market data list
     if (!isBuyOrder) {
-        strcpy(marketDataList[*marketDataCount].instrument, order->instrument);
-        marketDataList[*marketDataCount].lastPx = order->price;
-        (*marketDataCount)++;
+        strcpy(marketDataList[marketDataCount].instrument, order->instrument);
+        marketDataList[marketDataCount].lastPx = order->price;
+        (marketDataCount)++;
     }
 }
 
@@ -253,7 +254,7 @@ void handleResendRequest(ClientInfo* client, const char* message, int clientSock
     }
 }
 
-void handleOrderCancelRequest(ClientInfo* client, const char* message, int clientSocket, char* buffer, NewOrderSingle** buyOrders, NewOrderSingle** sellOrders, MarketData* marketDataList, int* marketDataCount) {
+void handleOrderCancelRequest(ClientInfo* client, const char* message, int clientSocket, char* buffer) {
     char clOrdId[20];
     sscanf(message, "CompID=%*[^|]|ServerSeqNum=%*d|ClientSeqNum=%*d|MsgType=%*[^|]|ClOrdID=%[^|]|",
            clOrdId);
@@ -267,7 +268,7 @@ void handleOrderCancelRequest(ClientInfo* client, const char* message, int clien
     while (currentOrder != NULL) {
         if (strcmp(currentOrder->clOrdId, clOrdId) == 0) {
             if (prevOrder == NULL) {
-                *buyOrders = currentOrder->next;
+                buyOrders = currentOrder->next;
             } else {
                 prevOrder->next = currentOrder->next;
             }
@@ -279,11 +280,11 @@ void handleOrderCancelRequest(ClientInfo* client, const char* message, int clien
     }
 
     prevOrder = NULL;
-    currentOrder = *sellOrders;
+    currentOrder = sellOrders;
     while (currentOrder != NULL) {
         if (strcmp(currentOrder->clOrdId, clOrdId) == 0) {
             if (prevOrder == NULL) {
-                *sellOrders = currentOrder->next;
+                sellOrders = currentOrder->next;
             } else {
                 prevOrder->next = currentOrder->next;
             }
@@ -295,13 +296,13 @@ void handleOrderCancelRequest(ClientInfo* client, const char* message, int clien
     }
 
     // Remove from market data
-    for (int i = 0; i < *marketDataCount; i++) {
+    for (int i = 0; i < marketDataCount; i++) {
         if (strcmp(marketDataList[i].instrument, clOrdId) == 0) {
             // Shift all elements down
-            for (int j = i; j < *marketDataCount - 1; j++) {
+            for (int j = i; j < marketDataCount - 1; j++) {
                 marketDataList[j] = marketDataList[j + 1];
             }
-            (*marketDataCount)--;
+            (marketDataCount)--;
             break;
         }
     }
@@ -340,8 +341,8 @@ void handleClientMessage(ClientInfo* client, const char* message, int clientSock
         handleResendRequest(client, message, clientSocket);
     } else if (strcmp(msgType, "OrderCancelRequest") == 0) {
         handleOrderCancelRequest(client, message, clientSocket, buffer);
-    } else if (msgType == 'V') {
-        handleMarketDataRequest(&client, buffer, clientSocket, buffer);
+    } else if (strcmp(msgType, "V") == 0) {
+        handleMarketDataRequest(client, buffer, clientSocket, buffer);
     } else {
         writeLog(client->logFile, "Invalid message type");
         fflush(client->logFile);
@@ -350,10 +351,30 @@ void handleClientMessage(ClientInfo* client, const char* message, int clientSock
 
 void handleClient(int clientId) {
     char buffer[BUFFER_SIZE];
+    char message[BUFFER_SIZE];
     ClientInfo* client = NULL;
+
+    char fileName[20];
+    snprintf(fileName, sizeof(fileName), "%d.txt", clientId);
+    FILE* fp = fopen(fileName, "w");
+    if (fp == NULL) {
+        perror("Error in opening file");
+        exit(EXIT_FAILURE);
+    }
+    client->logFile = fp;
+    client->clientId = clientId;
+    client->lastSeqNum = 0;
     while (1) {
         memset(buffer, 0, sizeof(buffer));
-        read(clientId, buffer, sizeof(buffer));
+        ssize_t n = read(clientId, message, sizeof(message) - 1);
+        if (n < 0) {
+            perror("Read error");
+            exit(EXIT_FAILURE);
+        } else if (n == 0) {
+            printf("Client disconnected\n");
+            exit(EXIT_SUCCESS);
+        }
+        message[n] = '\0'; // assuming it's a text message
 
         if (client == NULL) {
             for (int i = 0; i < clientCount; i++) {
@@ -371,8 +392,9 @@ void handleClient(int clientId) {
             }
         }
 
-        handleClientMessage(client, buffer, clientId, buffer);
+        handleClientMessage(client, message, clientId, buffer);
     }
+    fclose(fp);
 }
 
 int main(int argc, char *argv[]) {

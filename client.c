@@ -28,6 +28,7 @@ typedef struct {
     char clOrdId[20];
     char origClOrdId[20];
     char ordStatus[2];
+    char text[20];
 } OrderCancelReject;
 
 typedef struct {
@@ -100,6 +101,15 @@ void formatLogonMessage(char* message) {
     }
     checksum %= 256;
     snprintf(message + strlen(message), BUFFER_SIZE - strlen(message), "10=%03d|", checksum);
+}
+
+void sendFIXMessage(int clientSocket, const char* message, FILE* logFile) {
+    ssize_t bytesSent = send(clientSocket, message, strlen(message), 0);
+    if (bytesSent < 0) {
+        perror("Error in sending data");
+        exit(EXIT_FAILURE);
+    }
+    writeLog(logFile, message);
 }
 
 void resendFIXMessages(int clientSocket, int seqNum, FILE* logFile) {
@@ -240,14 +250,6 @@ void formatOrderCancelRequest(const OrderCancelRequest* request, char* message) 
     snprintf(message + strlen(message), BUFFER_SIZE - strlen(message) - 1, "10=%03d|", checksum);
 }
 
-void sendFIXMessage(int clientSocket, const char* message, FILE* logFile) {
-    ssize_t bytesSent = send(clientSocket, message, strlen(message), 0);
-    if (bytesSent < 0) {
-        perror("Error in sending data");
-        exit(EXIT_FAILURE);
-    }
-    writeLog(logFile, message);
-}
 
 int main() {
     int clientSocket;
@@ -283,7 +285,7 @@ int main() {
         exit(EXIT_SUCCESS);
     }
 
-    FILE* logFile = fopen("//Users/alpaltug/Desktop/code/staj'23/cboe/client.log", "w");
+    FILE* logFile = fopen("/Users/alpaltug/Desktop/code/staj'23/cboe/client.log", "w");
     if (logFile == NULL) {
         perror("Error in creating log file");
         close(clientSocket);
@@ -296,6 +298,20 @@ int main() {
     sendFIXMessage(clientSocket, logonMessage, logFile);
 
     while (1) {
+        printf("> ");
+        memset(buffer, 0, sizeof(buffer));
+        bytesRead = recv(clientSocket, buffer, sizeof(buffer) - 1, 0);
+        if (bytesRead > 0) {
+            // Handle incoming message
+            handleIncomingMessage(buffer, clientSocket, logFile);
+        } else if (bytesRead < 0) {
+            perror("Error in receiving data");
+            break;
+        } else {
+            printf("Server closed the connection.\n");
+            break;
+        }
+
         printf("> ");
         if (fgets(buffer, BUFFER_SIZE, stdin) == NULL) {
             perror("Error in reading from stdin");
